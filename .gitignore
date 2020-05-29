@@ -1,0 +1,9 @@
+.idea
+
+work_dir
+
+
+cfg.yaml
+cfg-local.yaml
+coco-local.yaml
+*.yaml
