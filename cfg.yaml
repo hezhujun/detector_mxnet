@@ -1,0 +1,43 @@
+dataset:
+  train_data:
+    root: H:\datasets\coco\train2017
+    annFile: H:\datasets\coco\annotations\instances_train2017.json
+  val_data:
+    root: H:\datasets\coco\val2017
+    annFile: H:\datasets\coco\annotations\instances_val2017.json
+  test_data:
+    root: H:\datasets\coco\val2017
+    annFile: H:\datasets\coco\annotations\instances_val2017.json
+
+network: resnet50_v1b
+num_workers: 4
+batch_size_per_device: 1
+gpus: []
+epochs: 12
+resume: ""
+start_epoch: 0
+lr: 0.001
+lr_decay: 0.1
+lr_decay_epoch: [14, 20]
+lr_warmup: 0
+lr_warmup_factor: 0.333
+momentum: 0.9
+wd: 5e-4
+log_interval: 100
+save_prefix: "work_dir"
+save_interval: 1
+val_interval: 1
+seed: 233
+verbose: ~
+mixup: ~
+no_mixup_epochs: 20
+norm_layer: ~
+rpn_smoothl1_rho: 0.111
+rcnn-smoothl1_rho: 1
+use_fpn: ~
+disable_hybridization: ~
+static_alloc: ~
+#amp: ~
+#horovod: ~
+executor_threads: 1
+kv_store: nccl
