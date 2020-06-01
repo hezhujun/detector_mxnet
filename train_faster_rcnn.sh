@@ -1,0 +1,14 @@
+python train_faster_rcnn.py \
+ --dataset coco \
+ --train_data_root "H:\datasets\coco\train2017" \
+ --train_ann_file "H:\datasets\coco\annotations\instances_train2017.json" \
+ --val_data_root "H:\datasets\coco\val2017" \
+ --val_ann_file "H:\datasets\coco\annotations\instances_val2017.json"  \
+ --gpus "" \
+ --use-fpn \
+ --num-workers 4 \
+ --lr 0.0001 \
+ --epochs 12 \
+ --lr-decay-epoch 8,11 \
+ --save-prefix tct/result \
+ --batch-size 1

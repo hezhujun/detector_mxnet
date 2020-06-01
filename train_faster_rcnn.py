@@ -16,7 +16,7 @@ import time
 import numpy as np
 import mxnet as mx
 from mxnet import gluon
-from mxnet.contrib import amp
+from mxnet.contrib import amp   # 混合精度模块
 import gluoncv as gcv
 
 gcv.utils.check_version('0.7.0')
@@ -31,7 +31,7 @@ from gluoncv.utils.metrics.coco_detection import COCODetectionMetric
 from gluoncv.utils.parallel import Parallel
 from gluoncv.utils.metrics.rcnn import RPNAccMetric, RPNL1LossMetric, RCNNAccMetric, \
     RCNNL1LossMetric
-from gluoncv.model_zoo.rcnn.faster_rcnn.data_parallel import ForwardBackwardTask
+from data_parallel import ForwardBackwardTask
 
 try:
     import horovod.mxnet as hvd
@@ -45,8 +45,12 @@ def parse_args():
                         choices=['resnet18_v1b', 'resnet50_v1b', 'resnet101_v1d',
                                  'resnest50', 'resnest101', 'resnest269'],
                         help="Base network name which serves as feature extraction base.")
-    parser.add_argument('--dataset', type=str, default='voc',
+    parser.add_argument('--dataset', type=str, default='coco',
                         help='Training dataset. Now support voc and coco.')
+    parser.add_argument("--train_data_root", type=str)
+    parser.add_argument("--train_ann_file", type=str)
+    parser.add_argument("--val_data_root", type=str)
+    parser.add_argument("--val_ann_file", type=str)
     parser.add_argument('--num-workers', '-j', dest='num_workers', type=int,
                         default=4, help='Number of data workers, you can use larger '
                                         'number to accelerate data loading, '
@@ -309,8 +313,11 @@ def get_dataset(dataset, args):
                                                generate_classes=True)
         val_metric = VOC07MApMetric(iou_thresh=0.5, class_names=val_dataset.classes)
     elif dataset.lower() == 'coco':
-        train_dataset = gdata.COCODetection(splits='instances_train2017', use_crowd=False)
-        val_dataset = gdata.COCODetection(splits='instances_val2017', skip_empty=False)
+        from lib.dataset.coco import COCODataset
+        train_dataset = COCODataset(root=args.train_data_root, annFile=args.train_ann_file, use_crowd=False)
+        val_dataset = COCODataset(root=args.val_data_root, annFile=args.val_ann_file, use_crowd=False)
+        # train_dataset = gdata.COCODetection(splits='instances_train2017', use_crowd=False)
+        # val_dataset = gdata.COCODetection(splits='instances_val2017', skip_empty=False)
         val_metric = COCODetectionMetric(val_dataset, args.save_prefix + '_eval', cleanup=True)
     else:
         raise NotImplementedError('Dataset: {} not implemented.'.format(dataset))
@@ -333,12 +340,22 @@ def get_dataloader(net, train_dataset, val_dataset, train_transform, val_transfo
                                                 num_parts=hvd.size() if args.horovod else 1,
                                                 part_index=hvd.rank() if args.horovod else 0,
                                                 shuffle=True)
+    # dataset: train_dataset.transform(train_transform(net.short, net.max_size, net, ashape=net.ashape, multi_stage=args.use_fpn))
+    # ashape: anchor 预先定义的大小
+    # multi_stage + ashape : 计算anchor
     train_loader = mx.gluon.data.DataLoader(train_dataset.transform(
         train_transform(net.short, net.max_size, net, ashape=net.ashape, multi_stage=args.use_fpn)),
         batch_sampler=train_sampler, batchify_fn=train_bfn, num_workers=args.num_workers)
     val_bfn = Tuple(*[Append() for _ in range(3)])
     short = net.short[-1] if isinstance(net.short, (tuple, list)) else net.short
     # validation use 1 sample per device
+    # dataset: val_dataset.transform(val_transform(short, net.max_size))
+    # 每个item返回 img, bbox.astype('float32'), mx.nd.array([im_scale])
+    # bbox: x1, y1, x2, y2, class_id
+    # img最短边<= short，最长边<=net.max_size
+    # Tuple 不是python中的元组tuple
+    # Append(): 每个样本自成ndarray，所有样本数据的大小不必相同，返回的batch是列表
+    # val_bfn 有3个Append()，每个Append()处理dataset item的一个属性
     val_loader = mx.gluon.data.DataLoader(
         val_dataset.transform(val_transform(short, net.max_size)), num_shards, False,
         batchify_fn=val_bfn, last_batch='keep', num_workers=args.num_workers)
@@ -492,7 +509,7 @@ def train(net, train_data, val_data, eval_metric, batch_size, ctx, args):
             # TODO(zhreshold) only support evenly mixup now, target generator needs to be modified otherwise
             train_data._dataset._data.set_mixup(np.random.uniform, 0.5, 0.5)
             mix_ratio = 0.5
-            if epoch >= args.epochs - args.no_mixup_epochs:
+            if epoch >= (args.epochs - args.no_mixup_epochs):
                 train_data._dataset._data.set_mixup(None)
                 mix_ratio = 1.0
         while lr_steps and epoch >= lr_steps[0]:
@@ -525,6 +542,7 @@ def train(net, train_data, val_data, eval_metric, batch_size, ctx, args):
                 if executor is not None:
                     result = executor.get()
                 else:
+                    # hvd默认数据只划分成一份
                     result = rcnn_task.forward_backward(list(zip(*batch))[0])
                 if (not args.horovod) or hvd.rank() == 0:
                     for k in range(len(metric_losses)):
@@ -581,10 +599,17 @@ if __name__ == '__main__':
         ctx = [mx.gpu(int(i)) for i in args.gpus.split(',') if i.strip()]
         ctx = ctx if ctx else [mx.cpu()]
 
+    if (not args.horovod) or hvd.rank() == 0:
+        _dir = os.path.dirname(args.save_prefix)
+        if _dir and not os.path.exists(_dir):
+            os.makedirs(_dir)
+
     # training data
+    print("Preparing dataset")
     train_dataset, val_dataset, eval_metric = get_dataset(args.dataset, args)
 
     # network
+    print("Preparing network")
     kwargs = {}
     module_list = []
     if args.use_fpn:
@@ -614,7 +639,7 @@ if __name__ == '__main__':
             norm_kwargs = None
             sym_norm_layer = None
             sym_norm_kwargs = None
-        classes = train_dataset.CLASSES
+        classes = train_dataset.classes
         net = get_model('custom_faster_rcnn_fpn', classes=classes, transfer=None,
                         dataset=args.dataset, pretrained_base=not args.no_pretrained_base,
                         base_network_name=args.network, norm_layer=norm_layer,
@@ -638,7 +663,8 @@ if __name__ == '__main__':
                         num_sample=args.rcnn_num_samples, pos_iou_thresh=args.rcnn_pos_iou_thresh,
                         pos_ratio=args.rcnn_pos_ratio, max_num_gt=args.max_num_gt)
     else:
-        net = get_model(net_name, pretrained_base=True,
+        import lib.model.model_zoo as my_model_zoo
+        net = my_model_zoo.get_model(net_name, pretrained_base=True, dataset=train_dataset,
                         per_device_batch_size=args.batch_size // num_gpus, **kwargs)
     args.save_prefix += net_name
     if args.resume.strip():
@@ -658,10 +684,12 @@ if __name__ == '__main__':
         net.collect_params('.*normalizedperclassboxcenterencoder.*').setattr('dtype', 'float32')
 
     # dataloader
+    print("Preparing dataloader")
     batch_size = args.batch_size // num_gpus if args.horovod else args.batch_size
     train_data, val_data = get_dataloader(
         net, train_dataset, val_dataset, FasterRCNNDefaultTrainTransform,
         FasterRCNNDefaultValTransform, batch_size, len(ctx), args)
 
     # training
+    print("Preparing training")
     train(net, train_data, val_data, eval_metric, batch_size, ctx, args)
