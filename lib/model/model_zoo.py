@@ -10,13 +10,14 @@ from gluoncv.model_zoo.rcnn.faster_rcnn import get_faster_rcnn
 from gluoncv.nn.feature import FPNFeatureExpander
 
 
-def faster_rcnn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **kwargs):
+def faster_rcnn_resnet50_v1b_coco(dataset, pretrained=False, pretrained_base=True, **kwargs):
     r"""Faster RCNN model from the paper
     "Ren, S., He, K., Girshick, R., & Sun, J. (2015). Faster r-cnn: Towards
     real-time object detection with region proposal networks"
 
     Parameters
     ----------
+    dataset: VisionDataset
     pretrained : bool or str
         Boolean value controls whether to load the default pretrained weights for model.
         String value represents the hashtag for a certain version of pretrained weights.
@@ -34,6 +35,7 @@ def faster_rcnn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **kwar
     >>> print(model)
     """
     from gluoncv.model_zoo.resnetv1b import resnet50_v1b
+    classes = dataset.classes
     pretrained_base = False if pretrained else pretrained_base
     base_network = resnet50_v1b(pretrained=pretrained_base, dilated=False,
                                 use_global_stats=True, **kwargs)
@@ -46,7 +48,7 @@ def faster_rcnn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **kwar
     train_patterns = '|'.join(['.*dense', '.*rpn', '.*down(2|3|4)_conv', '.*layers(2|3|4)_conv'])
     return get_faster_rcnn(
         name='resnet50_v1b', dataset='coco', pretrained=pretrained,
-        features=features, top_features=top_features,
+        features=features, top_features=top_features, classes=classes,
         short=800, max_size=1333, train_patterns=train_patterns,
         nms_thresh=0.5, nms_topk=-1, post_nms=-1,
         roi_mode='align', roi_size=(14, 14), strides=16, clip=4.14,
@@ -58,7 +60,7 @@ def faster_rcnn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **kwar
         max_num_gt=100, **kwargs)
 
 
-def faster_rcnn_fpn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **kwargs):
+def faster_rcnn_fpn_resnet50_v1b_coco(dataset, pretrained=False, pretrained_base=True, **kwargs):
     r"""Faster RCNN model with FPN from the paper
     "Ren, S., He, K., Girshick, R., & Sun, J. (2015). Faster r-cnn: Towards
     real-time object detection with region proposal networks"
@@ -67,6 +69,7 @@ def faster_rcnn_fpn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **
 
     Parameters
     ----------
+    dataset : VisionDataset
     pretrained : bool or str
         Boolean value controls whether to load the default pretrained weights for model.
         String value represents the hashtag for a certain version of pretrained weights.
@@ -80,10 +83,11 @@ def faster_rcnn_fpn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **
 
     Examples
     --------
-    >>> model = faster_rcnn_fpn_resnet50_v1b_coco(pretrained=True)
+    >>> model = faster_rcnn_fpn_resnet50_v1b_coco(dataset, pretrained=True)
     >>> print(model)
     """
     from gluoncv.model_zoo.resnetv1b import resnet50_v1b
+    classes = dataset.classes
     pretrained_base = False if pretrained else pretrained_base
     base_network = resnet50_v1b(pretrained=pretrained_base, dilated=False,
                                 use_global_stats=True, **kwargs)
@@ -103,7 +107,7 @@ def faster_rcnn_fpn_resnet50_v1b_coco(pretrained=False, pretrained_base=True, **
         ['.*dense', '.*rpn', '.*down(2|3|4)_conv', '.*layers(2|3|4)_conv', 'P'])
     return get_faster_rcnn(
         name='fpn_resnet50_v1b', dataset='coco', pretrained=pretrained, features=features,
-        top_features=top_features, box_features=box_features,
+        top_features=top_features, box_features=box_features, classes=classes,
         short=800, max_size=1333, min_stage=2, max_stage=6, train_patterns=train_patterns,
         nms_thresh=0.5, nms_topk=-1, post_nms=-1, roi_mode='align', roi_size=(7, 7),
         strides=(4, 8, 16, 32, 64), clip=4.14, rpn_channel=1024, base_size=16,
