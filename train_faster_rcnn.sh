@@ -1,9 +1,9 @@
 python train_faster_rcnn.py \
  --dataset coco \
- --train_data_root "H:\datasets\coco\train2017" \
- --train_ann_file "H:\datasets\coco\annotations\instances_train2017.json" \
- --val_data_root "H:\datasets\coco\val2017" \
- --val_ann_file "H:\datasets\coco\annotations\instances_val2017.json"  \
+ --train_data_root /root/userfolder/datasets \
+ --train_ann_file /root/userfolder/datasets/TCT/annotations/yzh/mini-data/train.json \
+ --val_data_root /root/userfolder/datasets \
+ --val_ann_file /root/userfolder/datasets/TCT/annotations/yzh/mini-data/val.json  \
  --gpus "" \
  --use-fpn \
  --num-workers 4 \
