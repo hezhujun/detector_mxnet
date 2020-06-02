@@ -3,7 +3,7 @@ python train_faster_rcnn.py \
  --train_data_root /root/userfolder/datasets \
  --train_ann_file /root/userfolder/datasets/TCT/annotations/yzh/mini-data/train.json \
  --val_data_root /root/userfolder/datasets \
- --val_ann_file /root/userfolder/datasets/TCT/annotations/yzh/mini-data/val.json  \
+ --val_ann_file /root/userfolder/datasets/TCT/annotations/yzh/mini-data/test.json  \
  --gpus "" \
  --use-fpn \
  --num-workers 4 \
@@ -11,4 +11,5 @@ python train_faster_rcnn.py \
  --epochs 12 \
  --lr-decay-epoch 8,11 \
  --save-prefix tct/result \
- --batch-size 1
+ --batch-size 1 \
+ --kv-store nccl

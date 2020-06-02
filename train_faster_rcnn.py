@@ -593,10 +593,11 @@ if __name__ == '__main__':
         amp.init()
 
     # training contexts
+    ctx = [mx.gpu(int(i)) for i in args.gpus.split(',') if i.strip()]
     if args.horovod:
-        ctx = [mx.gpu(hvd.local_rank())]
+        assert len(ctx) == hvd.size()
+        ctx = [ctx[hvd.local_rank()]]
     else:
-        ctx = [mx.gpu(int(i)) for i in args.gpus.split(',') if i.strip()]
         ctx = ctx if ctx else [mx.cpu()]
 
     if (not args.horovod) or hvd.rank() == 0:
