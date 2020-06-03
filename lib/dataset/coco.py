@@ -12,7 +12,7 @@ class COCODataset(gdata.COCODetection):
         _coco = COCO(self._annFile)
         self._coco_ = _coco
         classes = [c["name"] for c in _coco.loadCats(_coco.getCatIds())]
-        self.CLASSES = classes
+        type(self).CLASSES = classes
         super(COCODataset, self).__init__(root, ("",), transfom, mini_object_area, skip_empty, use_crowd)
         self._coco.append(_coco)
 
