@@ -6,7 +6,7 @@ import mxnet as mx
 from mxnet.gluon import nn
 from mxnet.gluon.contrib.nn import SyncBatchNorm
 
-from gluoncv.model_zoo.rcnn.faster_rcnn import get_faster_rcnn
+from .faster_rcnn import get_faster_rcnn
 from gluoncv.nn.feature import FPNFeatureExpander
 
 

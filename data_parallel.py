@@ -2,6 +2,7 @@
 
 from mxnet import autograd
 from mxnet.contrib import amp
+from mxnet import contrib, ndarray as nd
 
 from gluoncv.utils.parallel import Parallelizable
 
@@ -45,10 +46,26 @@ class ForwardBackwardTask(Parallelizable):
         with autograd.record():
             gt_label = label[:, :, 4:5]
             gt_box = label[:, :, :4]
+            # cls_pred (BS, num_samples, C+1)
+            # box_pred (BS, num_pos, C, 4)
+            # rpn_box  (BS, num_samples, 4)
+            # samples  (BS, num_samples)   gt_class_id
+            # matches  (BS, num_samples)   gt_indices
+            # raw_rpn_score (BS, num_anchors, 1)
+            # raw_rpn_box   (BS, num_anchors, 4)
+            # anchors       (BS, num_anchors, 4)
+            # cls_targets   (BS, num_samples)
+            # box_targets   (BS, num_pos, C, 4)
+            # box_masks     (BS, num_pos, C, 4)
+            # indices       (BS, num_pos)       相对于rpn_box的序号
+            # roi           (BS, rpn_post_nms, 4) rpn返回的roi
+            # cls_pred, box_pred, rpn_box, samples, matches, raw_rpn_score, raw_rpn_box, anchors, cls_targets, \
+            #     box_targets, box_masks, indices = self.net(data, gt_box, gt_label)
             cls_pred, box_pred, _, _, _Z, rpn_score, rpn_box, _, cls_targets, \
-                box_targets, box_masks, _ = self.net(data, gt_box, gt_label)
+                box_targets, box_masks, _, roi = self.net(data, gt_box, gt_label)
             # losses of rpn
             rpn_score = rpn_score.squeeze(axis=-1)
+            # rpn_cls_targets: 1: pos 0: neg -1: ignore
             num_rpn_pos = (rpn_cls_targets >= 0).sum()
             rpn_loss1 = self.rpn_cls_loss(rpn_score, rpn_cls_targets,
                                           rpn_cls_targets >= 0) * rpn_cls_targets.size / num_rpn_pos
@@ -82,5 +99,16 @@ class ForwardBackwardTask(Parallelizable):
             else:
                 total_loss.backward()
 
-        return rpn_loss1_metric, rpn_loss2_metric, rcnn_loss1_metric, rcnn_loss2_metric, \
+            rpn_gt_recalls = []
+            for i in range(gt_label.shape[0]):
+                # 如果两个box面积都是0，iou是0
+                iou = contrib.ndarray.box_iou(roi[i], gt_box[i], format='corner')
+                iou_gt_max = nd.max(iou, axis=0)
+                _gt_label = nd.squeeze(gt_label[i])
+                iou_gt_max = contrib.nd.boolean_mask(iou_gt_max, _gt_label != -1)
+                rpn_gt_recall = nd.mean(iou_gt_max >= 0.5)
+                rpn_gt_recalls.append(rpn_gt_recall)
+            rpn_gt_recall = nd.mean(*rpn_gt_recalls)
+
+        return rpn_loss1_metric, rpn_loss2_metric, rcnn_loss1_metric, rcnn_loss2_metric, rpn_gt_recall, \
                rpn_acc_metric, rpn_l1_loss_metric, rcnn_acc_metric, rcnn_l1_loss_metric

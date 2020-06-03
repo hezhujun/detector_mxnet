@@ -7,15 +7,32 @@
 ## COCODetection
 从COCODetection获取的元素item是一个元组(img, label)。img是mxnet ndarray，原图大小。label是np的ndarray，是一个n*5的矩阵，n表示这张图片objs的个数，5表示(x1, y1, x2, y2, class_id)，class_id是json文件类别id映射之后的类别id。
 
+
+## FasterRCNNDefaultTrainTransform
+输出:
+- img: mxnet.NDArray, (3, h, w) 经过缩放，最小边为short，最大边不超过max_size，如果short是(a,b)，最小边在[a,b]范围内抖动。
+- label: numpy.ndarray, (num_objs, 5) 每个objs label格式(x1, y1, x2, y2, class_id)
+- cls_targets: list, 每个元素(h_i, w_i, num_anchors_per_position)表示每一层的anchors对应的class_id(包括背景类-1)。
+- box_targets： list, 每个元素(h_i, w_i, num_anchors_per_position×4)，没有对应gt bbox的位置填充0。
+- box_masks：list, 每个元素(h_i, w_i, num_anchors_per_position×4)，配合box_targets使用。
+
 ## FasterRCNNTrainBatchify
-数据处理流的输出
+FasterRCNNTrainBatchify把加载的batch分成num_shared份，每份是一个小batch，batch size通常是1。后续处理会把每份数据加载到相应的gpu上。
 
-- sharded_img：list，个数等于gpus的个数，每个元素是图片batch (BS, 3, max_h, max_w)，max取BS张图片的最大值，图片是用0填充。训练时一般是一卡一图，所以BS是1。
+输出
 
-- sharded_label：list，个数等于gpus的个数，每个元素(BS, max_objs, 5)，max_objs取决于BS张图片中最大的objs数，用-1填充。
+- img：如果只加载一张图片，mxnet.NDArray, (1, 3, h, w)。如果加载多张图片，list，每个元素(BS, 3, h, w)，
 
-- sharded_cls_targets：list，个数等于gpus的个数，每个元素(BS, num_anchors)，因为同一个item中BS张图片都padding成同样大小，所以BS张图片所对应的anchors是一样的，从这里开始到后面的输出每个item里面都不需要padding。
+- label：list，每个元素(BS, num_objs, 5)，同一个元素内用-1填充对齐。
 
-- sharded_box_targets：list，个数等于gpus的个数，每个元素(BS, num_anchors, 4)
+- cls_targets：tuple，每个元素(BS, num_anchors)。
 
-- sharded_box_masks：list，个数等于gpus的个数，每个元素(BS, num_anchors, 4)
+- box_targets：tuple，每个元素(BS, num_anchors, 4)。
+
+- box_masks：tuple，每个元素(BS, num_anchors, 4)。
+
+
+
+## Issue
+
+gluon.Trainer.step()会在gpu(0)申请内存？如果gpu(0)不能使用，记得添加系统变量export CUDA_VISIBLE_DEVICES= 指定程序使用的gpus。

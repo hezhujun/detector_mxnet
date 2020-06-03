@@ -15,7 +15,7 @@ import logging
 import time
 import numpy as np
 import mxnet as mx
-from mxnet import gluon
+from mxnet import gluon, contrib, ndarray as nd
 from mxnet.contrib import amp   # 混合精度模块
 import gluoncv as gcv
 
@@ -404,9 +404,10 @@ def validate(net, val_data, ctx, eval_metric, args):
         gt_bboxes = []
         gt_ids = []
         gt_difficults = []
+        rpn_gt_recalls = []
         for x, y, im_scale in zip(*batch):
             # get prediction results
-            ids, scores, bboxes = net(x)
+            ids, scores, bboxes, roi = net(x)
             det_ids.append(ids)
             det_scores.append(scores)
             # clip to image size
@@ -420,11 +421,24 @@ def validate(net, val_data, ctx, eval_metric, args):
             gt_bboxes[-1] *= im_scale
             gt_difficults.append(y.slice_axis(axis=-1, begin=5, end=6) if y.shape[-1] > 5 else None)
 
+            gt_label = y[:, :, 4:5]
+            gt_box = y[:, :, :4]
+            for i in range(gt_label.shape[0]):
+                # 如果两个box面积都是0，iou是0
+                iou = contrib.ndarray.box_iou(roi[i], gt_box[i], format='corner')
+                iou_gt_max = nd.max(iou, axis=0)
+                _gt_label = nd.squeeze(gt_label[i])
+                iou_gt_max = contrib.nd.boolean_mask(iou_gt_max, _gt_label != -1)
+                rpn_gt_recall = nd.mean(iou_gt_max >= 0.5)
+                rpn_gt_recalls.append(rpn_gt_recall.asscalar())
+
         # update metric
         for det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff in zip(det_bboxes, det_ids,
                                                                         det_scores, gt_bboxes,
                                                                         gt_ids, gt_difficults):
             eval_metric.update(det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff)
+    rpn_gt_recall = np.mean(rpn_gt_recalls)
+    print("RPN GT Recall", rpn_gt_recall)
     return eval_metric.get()
 
 
@@ -470,7 +484,8 @@ def train(net, train_data, val_data, eval_metric, batch_size, ctx, args):
     metrics = [mx.metric.Loss('RPN_Conf'),
                mx.metric.Loss('RPN_SmoothL1'),
                mx.metric.Loss('RCNN_CrossEntropy'),
-               mx.metric.Loss('RCNN_SmoothL1'), ]
+               mx.metric.Loss('RCNN_SmoothL1'),
+               mx.metric.Loss('RPN_GT_Recall'),]
 
     rpn_acc_metric = RPNAccMetric()
     rpn_bbox_metric = RPNL1LossMetric()
@@ -595,7 +610,7 @@ if __name__ == '__main__':
     # training contexts
     ctx = [mx.gpu(int(i)) for i in args.gpus.split(',') if i.strip()]
     if args.horovod:
-        assert len(ctx) == hvd.size()
+        assert len(ctx) == hvd.size()  # 限制单机器多gpu训练
         ctx = [ctx[hvd.local_rank()]]
     else:
         ctx = ctx if ctx else [mx.cpu()]
