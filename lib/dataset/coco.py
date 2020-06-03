@@ -3,6 +3,15 @@ import os
 
 
 class COCODataset(gdata.COCODetection):
+    """
+    gluoncv提供的COCODetection只支持coco数据集，而且遵循coco数据集的目录结构，不方便扩展到其他数据集
+    该类扩展COCODetection，支持任意的coco类型的数据集
+    因为CLASSES是绑定类，而不是对象，当新建一个COCODataset数据集对象时，
+    COCODataset的类属性CLASSES会修改成载入annFile中的classes
+    所以同一个程序中不要创建classes不同的COCODataset数据集对象
+    gluoncv的代码有时会调用dataset.CLASSES，有时会调用dataset.classes
+    因此，COCODataset和COCODetection一样，把数据集的classes存放到类属性CLASSES中
+    """
 
     def __init__(self, root, annFile, transfom=None, mini_object_area=0, skip_empty=True, use_crowd=True):
         self._annFile = annFile
