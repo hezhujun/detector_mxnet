@@ -350,6 +350,72 @@ def get_lr_at_iter(alpha, lr_warmup_factor=1. / 3.):
     return lr_warmup_factor * (1 - alpha) + alpha
 
 
+def validate(net, val_data, ctx, eval_metric, args):
+    """Test on validation dataset."""
+    clipper = gcv.nn.bbox.BBoxClipToImage()
+    eval_metric.reset()
+    if not args.disable_hybridization:
+        # input format is differnet than training, thus rehybridization is needed.
+        net.hybridize(static_alloc=args.static_alloc)
+    for batch in val_data:
+        batch = split_and_load(batch, ctx_list=ctx)
+        det_bboxes = []
+        det_ids = []
+        det_scores = []
+        gt_bboxes = []
+        gt_ids = []
+        gt_difficults = []
+        rpn_gt_recalls = []
+        for x, y, im_scale in zip(*batch):
+            # get prediction results
+            ids, scores, bboxes, roi = net(x)
+            det_ids.append(ids)
+            det_scores.append(scores)
+            # clip to image size
+            det_bboxes.append(clipper(bboxes, x))
+            # rescale to original resolution
+            im_scale = im_scale.reshape((-1)).asscalar()
+            det_bboxes[-1] *= im_scale
+            # split ground truths
+            gt_ids.append(y.slice_axis(axis=-1, begin=4, end=5))
+            gt_bboxes.append(y.slice_axis(axis=-1, begin=0, end=4))
+            gt_bboxes[-1] *= im_scale
+            gt_difficults.append(y.slice_axis(axis=-1, begin=5, end=6) if y.shape[-1] > 5 else None)
+
+            gt_label = y[:, :, 4:5]
+            gt_box = y[:, :, :4]
+            for i in range(gt_label.shape[0]):
+                _gt_label = nd.squeeze(gt_label[i])
+                match_mask = nd.zeros_like(_gt_label)
+                # 如果两个box面积都是0，iou是0
+                iou = nd.contrib.box_iou(roi[i], gt_box[i], format='corner')
+                num_raw = iou.shape[1]
+                # 为每个gt box分配anchor
+                # 参考http://zh.d2l.ai/chapter_computer-vision/anchor.html#%E6%A0%87%E6%B3%A8%E8%AE%AD%E7%BB%83%E9%9B%86%E7%9A%84%E9%94%9A%E6%A1%86
+                for _ in range(_gt_label.shape[0]):
+                    _iou = iou.reshape(-1)
+                    max = nd.max(_iou, axis=0)
+                    if max < 0.5:
+                        break
+                    pos = nd.argmax(_iou, axis=0)
+                    raw = (pos / num_raw).astype(np.int64)
+                    col = pos % num_raw
+                    iou[raw, :] = 0
+                    iou[:, col] = 0
+                    match_mask[col] = 1
+                match_mask = nd.contrib.boolean_mask(match_mask, _gt_label != -1)
+                rpn_gt_recalls.append(nd.mean(match_mask).asscalar())
+
+        # update metric
+        for det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff in zip(det_bboxes, det_ids,
+                                                                        det_scores, gt_bboxes,
+                                                                        gt_ids, gt_difficults):
+            eval_metric.update(det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff)
+    rpn_gt_recall = np.mean(rpn_gt_recalls)
+    print("RPN GT Recall", rpn_gt_recall)
+    return eval_metric.get()
+
+
 if __name__ == '__main__':
     import sys
 
@@ -461,7 +527,6 @@ if __name__ == '__main__':
         FasterRCNNDefaultValTransform, batch_size, len(ctx), args)
 
     # testing
-    from .train_faster_rcnn import validate
     map_name, mean_ap = validate(net, val_data, ctx, eval_metric, args)
     val_msg = '\n'.join(['{}={}'.format(k, v) for k, v in zip(map_name, mean_ap)])
     print("Validation: \n{}".format(val_msg))
