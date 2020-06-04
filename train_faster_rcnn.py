@@ -432,10 +432,11 @@ def validate(net, val_data, ctx, eval_metric, args):
                 # 为每个gt box分配anchor
                 # 参考http://zh.d2l.ai/chapter_computer-vision/anchor.html#%E6%A0%87%E6%B3%A8%E8%AE%AD%E7%BB%83%E9%9B%86%E7%9A%84%E9%94%9A%E6%A1%86
                 for _ in range(_gt_label.shape[0]):
-                    max = nd.max(iou)
+                    _iou = iou.reshape(-1)
+                    max = nd.max(_iou, axis=0)
                     if max < 0.5:
                         break
-                    pos = nd.argmax(iou)
+                    pos = nd.argmax(_iou, axis=0)
                     raw = (pos / num_raw).astype(np.int64)
                     col = pos % num_raw
                     iou[raw, :] = 0
