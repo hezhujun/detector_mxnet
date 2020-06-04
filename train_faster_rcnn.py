@@ -424,13 +424,25 @@ def validate(net, val_data, ctx, eval_metric, args):
             gt_label = y[:, :, 4:5]
             gt_box = y[:, :, :4]
             for i in range(gt_label.shape[0]):
-                # 如果两个box面积都是0，iou是0
-                iou = contrib.ndarray.box_iou(roi[i], gt_box[i], format='corner')
-                iou_gt_max = nd.max(iou, axis=0)
                 _gt_label = nd.squeeze(gt_label[i])
-                iou_gt_max = contrib.nd.boolean_mask(iou_gt_max, _gt_label != -1)
-                rpn_gt_recall = nd.mean(iou_gt_max >= 0.5)
-                rpn_gt_recalls.append(rpn_gt_recall.asscalar())
+                match_mask = nd.zeros_like(_gt_label)
+                # 如果两个box面积都是0，iou是0
+                iou = nd.contrib.box_iou(roi[i], gt_box[i], format='corner')
+                num_raw = iou.shape[1]
+                # 为每个gt box分配anchor
+                # 参考http://zh.d2l.ai/chapter_computer-vision/anchor.html#%E6%A0%87%E6%B3%A8%E8%AE%AD%E7%BB%83%E9%9B%86%E7%9A%84%E9%94%9A%E6%A1%86
+                for _ in range(_gt_label.shape[0]):
+                    max = nd.max(iou)
+                    if max < 0.5:
+                        break
+                    pos = nd.argmax(iou)
+                    raw = (pos / num_raw).astype(np.int64)
+                    col = pos % num_raw
+                    iou[raw, :] = 0
+                    iou[:, col] = 0
+                    match_mask[col] = 1
+                match_mask = nd.contrib.boolean_mask(match_mask, _gt_label != -1)
+                rpn_gt_recalls.append(nd.mean(match_mask).asscalar())
 
         # update metric
         for det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff in zip(det_bboxes, det_ids,

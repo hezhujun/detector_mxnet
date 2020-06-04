@@ -99,16 +99,17 @@ class ForwardBackwardTask(Parallelizable):
             else:
                 total_loss.backward()
 
-            rpn_gt_recalls = []
-            for i in range(gt_label.shape[0]):
-                # 如果两个box面积都是0，iou是0
-                iou = contrib.ndarray.box_iou(roi[i], gt_box[i], format='corner')
-                iou_gt_max = nd.max(iou, axis=0)
-                _gt_label = nd.squeeze(gt_label[i])
-                iou_gt_max = contrib.nd.boolean_mask(iou_gt_max, _gt_label != -1)
-                rpn_gt_recall = nd.mean(iou_gt_max >= 0.5)
-                rpn_gt_recalls.append(rpn_gt_recall)
-            rpn_gt_recall = nd.mean(*rpn_gt_recalls)
+            # rpn_gt_recalls = []
+            # for i in range(gt_label.shape[0]):
+            #     # 如果两个box面积都是0，iou是0
+            #     iou = contrib.ndarray.box_iou(roi[i], gt_box[i], format='corner')
+            #     iou_gt_max = nd.max(iou, axis=0)
+            #     _gt_label = nd.squeeze(gt_label[i])
+            #     iou_gt_max = contrib.nd.boolean_mask(iou_gt_max, _gt_label != -1)
+            #     rpn_gt_recall = nd.mean(iou_gt_max >= 0.5)
+            #     rpn_gt_recalls.append(rpn_gt_recall)
+            # rpn_gt_recall = sum(rpn_gt_recalls) / len(rpn_gt_recalls)
+            rpn_gt_recall = nd.zeros((1,), ctx=roi.context)
 
         return rpn_loss1_metric, rpn_loss2_metric, rcnn_loss1_metric, rcnn_loss2_metric, rpn_gt_recall, \
                rpn_acc_metric, rpn_l1_loss_metric, rcnn_acc_metric, rcnn_l1_loss_metric
