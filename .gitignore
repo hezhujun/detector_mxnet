@@ -1,9 +1,11 @@
 .idea
 
 work_dir
-
+test.py
 
 cfg.yaml
 cfg-local.yaml
 coco-local.yaml
 *.yaml
+
+train_faster_rcnn_penn.sh
