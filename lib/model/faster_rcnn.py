@@ -9,9 +9,10 @@ from mxnet.gluon import nn
 from mxnet.gluon.contrib.nn import SyncBatchNorm
 
 from gluoncv.model_zoo.rcnn.faster_rcnn.rcnn_target import RCNNTargetSampler, RCNNTargetGenerator
-from gluoncv.model_zoo.rcnn.rcnn import custom_rcnn_fpn
-from gluoncv.model_zoo.rcnn import RCNN
+from .rcnn import custom_rcnn_fpn
+from .rcnn import RCNN
 from gluoncv.model_zoo.rcnn.rpn import RPN
+from .bilinear_roi_pooling import BilinearROIPooling
 
 
 __all__ = ['FasterRCNN', 'get_faster_rcnn', 'custom_faster_rcnn_fpn']
@@ -171,7 +172,7 @@ class FasterRCNN(RCNN):
                  rpn_train_pre_nms=12000, rpn_train_post_nms=2000, rpn_test_pre_nms=6000,
                  rpn_test_post_nms=300, rpn_min_size=16, per_device_batch_size=1, num_sample=128,
                  pos_iou_thresh=0.5, pos_ratio=0.25, max_num_gt=300, additional_output=False,
-                 force_nms=False, minimal_opset=False, **kwargs):
+                 force_nms=False, minimal_opset=False, bilinear_type=None, **kwargs):
         super(FasterRCNN, self).__init__(
             features=features, top_features=top_features, classes=classes,
             box_features=box_features, short=short, max_size=max_size,
@@ -197,6 +198,9 @@ class FasterRCNN(RCNN):
         self._batch_size = per_device_batch_size
         self._num_sample = num_sample
         self._rpn_test_post_nms = rpn_test_post_nms
+        if roi_mode.lower() == "bilinear":
+            assert bilinear_type is not None
+            self.bilinear_type = bilinear_type
         if minimal_opset:
             self._target_generator = None
         else:
@@ -320,6 +324,18 @@ class FasterRCNN(RCNN):
                                                         sample_ratio=sampling_ratio)
                     pooled_feature = F.where(roi_level == l, pooled_feature,
                                              F.zeros_like(pooled_feature))
+            elif roi_mode == "bilinear":
+                if 'box_encode' in F.contrib.__dict__ and 'box_decode' in F.contrib.__dict__:
+                    masked_rpn_rois = F.where(roi_level == l, rpn_rois, F.ones_like(rpn_rois) * -1.)
+                    pooled_feature = BilinearROIPooling(F, features[i], masked_rpn_rois, roi_size,
+                                                        1. / strides[i], sample_ratio=sampling_ratio,
+                                                        type=self.bilinear_type)
+                else:
+                    pooled_feature = BilinearROIPooling(F, features[i], rpn_rois, roi_size,
+                                                        1. / strides[i], sample_ratio=sampling_ratio,
+                                                        type=self.bilinear_type)
+                    pooled_feature = F.where(roi_level == l, pooled_feature,
+                                             F.zeros_like(pooled_feature))
             else:
                 raise ValueError("Invalid roi mode: {}".format(roi_mode))
             pooled_roi_feats.append(pooled_feature)
@@ -396,6 +412,10 @@ class FasterRCNN(RCNN):
             elif self._roi_mode == 'align':
                 pooled_feat = F.contrib.ROIAlign(feat[0], rpn_roi, self._roi_size,
                                                  1. / self._strides, sample_ratio=2)
+            elif self._roi_mode == "bilinear":
+                pooled_feat = BilinearROIPooling(F, feat[0], rpn_roi, self._roi_size,
+                                                 1. / self._strides, sample_ratio=2,
+                                                 type=self.bilinear_type)
             else:
                 raise ValueError("Invalid roi mode: {}".format(self._roi_mode))
 

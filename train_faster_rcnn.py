@@ -32,6 +32,7 @@ from gluoncv.utils.parallel import Parallel
 from gluoncv.utils.metrics.rcnn import RPNAccMetric, RPNL1LossMetric, RCNNAccMetric, \
     RCNNL1LossMetric
 from data_parallel import ForwardBackwardTask
+from utils import *
 
 try:
     import horovod.mxnet as hvd
@@ -362,33 +363,6 @@ def get_dataloader(net, train_dataset, val_dataset, train_transform, val_transfo
     return train_loader, val_loader
 
 
-def save_params(net, logger, best_map, current_map, epoch, save_interval, prefix):
-    current_map = float(current_map)
-    if current_map > best_map[0]:
-        logger.info('[Epoch {}] mAP {} higher than current best {} saving to {}'.format(
-            epoch, current_map, best_map, '{:s}_best.params'.format(prefix)))
-        best_map[0] = current_map
-        net.save_parameters('{:s}_best.params'.format(prefix))
-        with open(prefix + '_best_map.log', 'a') as f:
-            f.write('{:04d}:\t{:.4f}\n'.format(epoch, current_map))
-    if save_interval and (epoch + 1) % save_interval == 0:
-        logger.info('[Epoch {}] Saving parameters to {}'.format(
-            epoch, '{:s}_{:04d}_{:.4f}.params'.format(prefix, epoch, current_map)))
-        net.save_parameters('{:s}_{:04d}_{:.4f}.params'.format(prefix, epoch, current_map))
-
-
-def split_and_load(batch, ctx_list):
-    """Split data to 1 batch each device."""
-    new_batch = []
-    for i, data in enumerate(batch):
-        if isinstance(data, (list, tuple)):
-            new_data = [x.as_in_context(ctx) for x, ctx in zip(data, ctx_list)]
-        else:
-            new_data = [data.as_in_context(ctx_list[0])]
-        new_batch.append(new_data)
-    return new_batch
-
-
 def validate(net, val_data, ctx, eval_metric, args):
     """Test on validation dataset."""
     clipper = gcv.nn.bbox.BBoxClipToImage()
@@ -453,10 +427,6 @@ def validate(net, val_data, ctx, eval_metric, args):
     rpn_gt_recall = np.mean(rpn_gt_recalls)
     print("RPN GT Recall", rpn_gt_recall)
     return eval_metric.get()
-
-
-def get_lr_at_iter(alpha, lr_warmup_factor=1. / 3.):
-    return lr_warmup_factor * (1 - alpha) + alpha
 
 
 def train(net, train_data, val_data, eval_metric, batch_size, ctx, args):
@@ -546,6 +516,8 @@ def train(net, train_data, val_data, eval_metric, batch_size, ctx, args):
             trainer.set_learning_rate(new_lr)
             logger.info("[Epoch {}] Set learning rate to {}".format(epoch, new_lr))
         for metric in metrics:
+            metric.reset()
+        for metric in metrics2:
             metric.reset()
         tic = time.time()
         btic = time.time()

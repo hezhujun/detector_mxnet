@@ -37,6 +37,16 @@ from PIL import Image
 from lib.dataset.coco import COCODataset
 from lib.util import draw_image
 from gluoncv import utils as gutils
+from utils import *
+
+
+class Record(mx.metric.EvalMetric):
+
+    def update(self, _, record):
+        self.sum_metric += record
+        self.global_sum_metric += record
+        self.num_inst += 1
+        self.global_num_inst += 1
 
 
 def parse_args():
@@ -46,33 +56,14 @@ def parse_args():
     return args
 
 
-def get_lr_at_iter(alpha, lr_warmup_factor=1. / 3.):
-    # lr factor 线性增长函数
-    # 最小为lr_warmup_factor
-    # 最大为1
-    return lr_warmup_factor * (1 - alpha) + alpha
-
-
-def split_and_load(batch, ctx_list):
-    """Split data to 1 batch each device."""
-    new_batch = []
-    for i, data in enumerate(batch):
-        if isinstance(data, (list, tuple)):
-            # train_loader 返回的数据，数据的每一项都是list/tuple，每个device处理list/tuple中的一项
-            # val_loader 同上，只是保证list/tuple中每项的batch size都是1
-            new_data = [x.as_in_context(ctx) for x, ctx in zip(data, ctx_list)]
-        else:
-            new_data = [data.as_in_context(ctx_list[0])]
-        new_batch.append(new_data)
-    return new_batch
-
-
-def validate(net, val_loader, ctx, eval_metric, cfg):
+def validate(net, val_data, ctx, eval_metric, cfg):
+    """Test on validation dataset."""
     clipper = gcv.nn.bbox.BBoxClipToImage()
     eval_metric.reset()
-    if not cfg["disable_hybridization"]:
-        net.hybridize(static_alloc=cfg["static_alloc"])
-    for batch in val_loader:
+    if not cfg["train"]["disable_hybridization"]:
+        # input format is differnet than training, thus rehybridization is needed.
+        net.hybridize(static_alloc=cfg["train"]["static_alloc"])
+    for batch in val_data:
         batch = split_and_load(batch, ctx_list=ctx)
         det_bboxes = []
         det_ids = []
@@ -80,51 +71,66 @@ def validate(net, val_loader, ctx, eval_metric, cfg):
         gt_bboxes = []
         gt_ids = []
         gt_difficults = []
+        rpn_gt_recalls = []
         for x, y, im_scale in zip(*batch):
-            ids, scores, bboxes = net(x)
+            # get prediction results
+            ids, scores, bboxes, roi = net(x)
             det_ids.append(ids)
             det_scores.append(scores)
+            # clip to image size
             det_bboxes.append(clipper(bboxes, x))
+            # rescale to original resolution
             im_scale = im_scale.reshape((-1)).asscalar()
             det_bboxes[-1] *= im_scale
+            # split ground truths
             gt_ids.append(y.slice_axis(axis=-1, begin=4, end=5))
             gt_bboxes.append(y.slice_axis(axis=-1, begin=0, end=4))
             gt_bboxes[-1] *= im_scale
             gt_difficults.append(y.slice_axis(axis=-1, begin=5, end=6) if y.shape[-1] > 5 else None)
 
-        for det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff in \
-                zip(det_bboxes, det_ids, det_scores, gt_bboxes, gt_ids, gt_difficults):
-            eval_metric.update(det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff)
+            gt_label = y[:, :, 4:5]
+            gt_box = y[:, :, :4]
+            for i in range(gt_label.shape[0]):
+                _gt_label = nd.squeeze(gt_label[i])
+                match_mask = nd.zeros_like(_gt_label)
+                # 如果两个box面积都是0，iou是0
+                iou = nd.contrib.box_iou(roi[i], gt_box[i], format='corner')
+                num_raw = iou.shape[1]
+                # 为每个gt box分配anchor
+                # 参考http://zh.d2l.ai/chapter_computer-vision/anchor.html#%E6%A0%87%E6%B3%A8%E8%AE%AD%E7%BB%83%E9%9B%86%E7%9A%84%E9%94%9A%E6%A1%86
+                for _ in range(_gt_label.shape[0]):
+                    _iou = iou.reshape(-1)
+                    max = nd.max(_iou, axis=0)
+                    if max < 0.5:
+                        break
+                    pos = nd.argmax(_iou, axis=0)
+                    raw = (pos / num_raw).astype(np.int64)
+                    col = pos % num_raw
+                    iou[raw, :] = 0
+                    iou[:, col] = 0
+                    match_mask[col] = 1
+                match_mask = nd.contrib.boolean_mask(match_mask, _gt_label != -1)
+                rpn_gt_recalls.append(nd.mean(match_mask).asscalar())
 
+        # update metric
+        for det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff in zip(det_bboxes, det_ids,
+                                                                        det_scores, gt_bboxes,
+                                                                        gt_ids, gt_difficults):
+            eval_metric.update(det_bbox, det_id, det_score, gt_bbox, gt_id, gt_diff)
+    rpn_gt_recall = np.mean(rpn_gt_recalls)
+    print("RPN GT Recall", rpn_gt_recall)
     return eval_metric.get()
 
 
-def save_params(net, logger, best_map, current_map, epoch, save_interval, prefix):
-    current_map = float(current_map)
-    if current_map > best_map[0]:
-        logger.info("[Epoch {}] mAP {} higher than current best {} saving to {}".format(
-            epoch, current_map, best_map, "{:s}_best.params".format(prefix)
-        ))
-        best_map[0] = current_map
-        net.save_parameters('{:s}_best.params'.format(prefix))
-        with open(prefix + "_best_map.log", "a") as f:
-            f.write("{:04d}:\t{:.4f}\n".format(epoch, current_map))
-    if save_interval and (epoch + 1) % save_interval == 0:
-        logger.info("[Epoch {}] Saving parameter to {}".format(
-            epoch, "{:s}_{:04d}_{:.4f}.params".format(prefix, epoch, current_map)
-        ))
-        net.save_parameters("{:s}_{:04d}_{:.4f}.params".format(prefix, epoch, current_map))
-
-
 def train(net, train_loader, val_loader, eval_metric, ctx, cfg):
-    kv = mx.kvstore.create(cfg["kv_store"])
+    kv = mx.kvstore.create(cfg["train"]["kv_store"])
     net.collect_params().setattr('grad_req', 'null')
     # 需要训练的参数的train_pattern在构造时输入到网络中
     net.collect_train_params().setattr('grad_req', 'write')
     optimizer_params = {
-        "learning_rate": cfg["lr"],
-        "wd": cfg["wd"],
-        "momentum": cfg["momentum"],
+        "learning_rate": cfg["train"]["lr"],
+        "wd": cfg["train"]["wd"],
+        "momentum": cfg["train"]["momentum"],
     }
     trainer = gluon.Trainer(
         net.collect_train_params(),
@@ -133,19 +139,20 @@ def train(net, train_loader, val_loader, eval_metric, ctx, cfg):
         kvstore=kv
     )
 
-    lr_decay = float(cfg["lr_decay"])
-    lr_steps = sorted([float(ls) for ls in cfg["lr_decay_epoch"]])
-    lr_warmup = float(cfg["lr_warmup"])
+    lr_decay = float(cfg["train"]["lr_decay"])
+    lr_steps = sorted([float(ls) for ls in cfg["train"]["lr_decay_epoch"]])
+    lr_warmup = float(cfg["train"]["lr_warmup_iteration"])
 
     rpn_cls_loss = mx.gluon.loss.SigmoidBinaryCrossEntropyLoss(from_sigmoid=False)
-    rpn_box_loss = mx.gluon.loss.HuberLoss(rho=cfg["rpn_smoothl1_rho"])
+    rpn_box_loss = mx.gluon.loss.HuberLoss(rho=cfg["train"]["rpn_smoothl1_rho"])
     rcnn_cls_loss = mx.gluon.loss.SoftmaxCrossEntropyLoss()
-    rcnn_box_loss = mx.gluon.loss.HuberLoss(rho=cfg["rcnn_smoothl1_rho"])
+    rcnn_box_loss = mx.gluon.loss.HuberLoss(rho=cfg["train"]["rcnn_smoothl1_rho"])
 
     metrics = [mx.metric.Loss("RPN_Conf"),
                mx.metric.Loss("RPN_SmoothL1"),
                mx.metric.Loss("RCNN_CrossEntropy"),
-               mx.metric.Loss("RCNN_SmoothL1")]
+               mx.metric.Loss("RCNN_SmoothL1"),
+               mx.metric.Loss('RPN_GT_Recall'),]
 
     rpn_acc_metric = RPNAccMetric()
     rpn_bbox_metric = RPNL1LossMetric()
@@ -153,10 +160,14 @@ def train(net, train_loader, val_loader, eval_metric, ctx, cfg):
     rcnn_bbox_metric = RCNNL1LossMetric()
     metrics2 = [rpn_acc_metric, rpn_bbox_metric, rcnn_acc_metric, rcnn_bbox_metric]
 
+    data_prepare_time = Record("data_prepare_time")
+    data_distributed_time = Record("data_distributed_time")
+    net_forward_backward_time = Record("net_forward_backward_time")
+
     logging.basicConfig()
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    log_file_path = cfg["save_prefix"] + "_train.log"
+    log_file_path = cfg["train"]["save_prefix"] + "_train.log"
     log_dir = os.path.dirname(log_file_path)
     if log_dir and not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -167,9 +178,9 @@ def train(net, train_loader, val_loader, eval_metric, ctx, cfg):
     if cfg["verbose"]:
         logger.info("Trainable parameters:")
         logger.info(net.collect_train_params().keys())
-    logger.info("Start training from [Epoch {}]".format(cfg['start_epoch']))
+    logger.info("Start training from [Epoch {}]".format(cfg["train"]['start_epoch']))
     best_map = [0]
-    for epoch in range(cfg["start_epoch"], cfg["epochs"]):
+    for epoch in range(cfg["train"]["start_epoch"], cfg["train"]["epochs"]):
         rcnn_task = ForwardBackwardTask(net, trainer, rpn_cls_loss, rpn_box_loss, rcnn_cls_loss,
                                         rcnn_box_loss, mix_ratio=1.0, amp_enabled=None)
         # 多线程执行运算操作
@@ -186,10 +197,10 @@ def train(net, train_loader, val_loader, eval_metric, ctx, cfg):
         # 后面再调用put()在后台线程运算
         # 目的是在第一次迭代中模型在主线程初始化
         # 调用cfg["executor_threads"]次是为了保证模型在不同设备上正常进行初始化？
-        executor = Parallel(cfg["executor_threads"], rcnn_task)
+        executor = Parallel(cfg["train"]["executor_threads"], rcnn_task)
         mix_ratio = 1.0
-        if not cfg["disable_hybridization"]:
-            net.hybridize(static_allo=cfg["static_alloc"])
+        if not cfg["train"]["disable_hybridization"]:
+            net.hybridize(static_alloc=cfg["train"]["static_alloc"])
 
         while lr_steps and epoch >= lr_steps[0]:
             new_lr = trainer.learning_rate * lr_decay
@@ -199,23 +210,35 @@ def train(net, train_loader, val_loader, eval_metric, ctx, cfg):
 
         for metric in metrics:
             metric.reset()
+        for metric in metrics2:
+            metric.reset()
+
+        data_prepare_time.reset()
+        data_distributed_time.reset()
+        net_forward_backward_time.reset()
+
         tic = time.time()
         btic = time.time()
         base_lr = trainer.learning_rate
         rcnn_task.mix_ratio = mix_ratio
 
+        before_data_prepare_point = time.time()
         for i, batch in enumerate(train_loader):
+            data_prepare_time.update(None, time.time() - before_data_prepare_point)
             if epoch == 0 and i <= lr_warmup:
-                new_lr = base_lr * get_lr_at_iter(i / lr_warmup, cfg["lr_warmup_factor"])
+                new_lr = base_lr * get_lr_at_iter(i / lr_warmup, cfg["train"]["lr_warmup_factor"])
                 if new_lr != trainer.learning_rate:
-                    if i % cfg["log_interval"] == 0:
+                    if i % cfg["train"]["log_interval"] == 0:
                         logger.info("[Epoch 0 Iteration {}] Set learning rate to {}".format(i, new_lr))
                 trainer.set_learning_rate(new_lr)
-
+            before_data_distributed_point = time.time()
             # img, label, cls_targets, box_targets, box_masks = batch
             batch = split_and_load(batch, ctx_list=ctx)  # 分发数据
+            data_distributed_time.update(None, time.time() - before_data_distributed_point)
             metric_losses = [[] for _ in metrics]
             add_losses = [[] for _ in metrics2]
+
+            before_net_forward_backward_point = time.time()
             for data in zip(*batch):
                 executor.put(data)  #
             for j in range(len(ctx)):
@@ -224,35 +247,41 @@ def train(net, train_loader, val_loader, eval_metric, ctx, cfg):
                     metric_losses[k].append(result[k])
                 for k in range(len(add_losses)):
                     add_losses[k].append(result[len(metric_losses) + k])
-
             for metric, record in zip(metrics, metric_losses):
                 metric.update(0, record)  # 把所有loss放到一起
             for metric, records in zip(metrics2, add_losses):
                 for pred in records:
                     metric.update(pred[0], pred[1])
-            trainer.step(cfg["batch_size_per_device"]*len(ctx))
+            trainer.step(cfg["dataset"]["batch_size_per_device"]*len(ctx))
+            net_forward_backward_time.update(None, time.time() - before_net_forward_backward_point)
 
-            if cfg["log_interval"] and not (i + 1) % cfg["log_interval"]:
+            if cfg["train"]["log_interval"] and not (i + 1) % cfg["train"]["log_interval"]:
                 msg = ",".join([
                     "{}={:.3f}".format(*metric.get()) for metric in metrics + metrics2
                 ])
                 logger.info("[Epoch {}][Batch {}], Speed: {:.3f} samples/sec, {}".format(
-                    epoch, i, cfg["log_interval"] * cfg["batch_size_per_device"] * len(ctx) / (time.time() - btic), msg
+                    epoch, i, cfg["train"]["log_interval"] * cfg["dataset"]["batch_size_per_device"] * len(ctx) / (time.time() - btic), msg
                 ))
+                time_msg = ",".join([
+                    "{}={}".format(*metric.get()) for metric in [data_prepare_time, data_distributed_time, net_forward_backward_time]
+                ])
+                logger.info("[Epoch {}][Batch {}], {}".format(epoch, i, time_msg))
                 btic = time.time()
+
+            before_data_prepare_point = time.time()
 
         msg = ",".join(["{}={:.3f}".format(*metric.get()) for metric in metrics])
         logger.info("[Epoch {}] Training cost: {:.3f}, {}".format(
             epoch, (time.time() - tic), msg
         ))
-        if not (epoch + 1) % cfg["val_interval"]:
+        if not (epoch + 1) % cfg["train"]["val_interval"]:
             map_name, mean_ap = validate(net, val_loader, ctx, eval_metric, cfg)
             val_msg = "\n".join(["{}={}".format(k, v) for k, v in zip(map_name, mean_ap)])
             logger.info("[Epoch {}] Validation: \n{}".format(epoch, val_msg))
             current_map = float(mean_ap[-1])
         else:
             current_map = 0.
-        save_params(net, logger, best_map, current_map, epoch, cfg["save_interval"], cfg["save_prefix"])
+        save_params(net, logger, best_map, current_map, epoch, cfg["train"]["save_interval"], cfg["train"]["save_prefix"])
 
 
 if __name__ == '__main__':
@@ -264,9 +293,18 @@ if __name__ == '__main__':
             from yaml import Loader, Dumper
         cfg = yaml.load(f, Loader)
 
+    cfg["train"]["wd"] = float(cfg["train"]["wd"])
+
     gutils.random.seed(cfg["seed"])
-    ctx = [mx.gpu(i) for i in cfg["gpus"]]
+    gpus = cfg["train"]["gpus"]
+    if gpus:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in gpus])
+        print("CUDA_VISIBLE_DEVICES=".format(os.environ["CUDA_VISIBLE_DEVICES"]))
+    ctx = [mx.gpu(i) for i in range(len(gpus))]
     ctx = ctx if ctx else [mx.cpu()]
+
+    if not os.path.exists(cfg["train"]["save_dir"]):
+        os.makedirs(cfg["train"]["save_dir"])
 
     train_data = cfg["dataset"]["train_data"]
     train_dataset = COCODataset(root=train_data["root"], annFile=train_data["annFile"], use_crowd=False)
@@ -274,29 +312,36 @@ if __name__ == '__main__':
     val_data = cfg["dataset"]["val_data"]
     val_dataset = COCODataset(root=val_data["root"], annFile=val_data["annFile"], use_crowd=False)
 
-    save_path = cfg["save_prefix"] + "_eval"
-    _dir = os.path.dirname(save_path)
-    if _dir and not os.path.exists(_dir):
-        os.makedirs(_dir)
+    save_path = os.path.join(cfg["train"]["save_dir"], "eval")
     eval_metric = COCODetectionMetric(val_dataset, save_path, cleanup=True)
 
     # network
     kwargs = {}
     module_list = []
-    if cfg["use_fpn"]:
+    model_cfg = cfg["model"].copy()
+    if model_cfg.pop("use_fpn"):
         module_list.append("fpn")
-    if cfg["norm_layer"]:
-        module_list.append(cfg["norm_layer"])
-        if cfg["norm_layer"] == "syncbn":
+    norm_layer = model_cfg.pop("norm_layer")
+    if norm_layer:
+        module_list.append(norm_layer)
+        if norm_layer == "syncbn":
             kwargs["num_devices"] = len(ctx)
 
     num_gpus = len(ctx)
-    net_name = "_".join(("faster_rcnn", *module_list, cfg["network"], "coco"))
-    net = get_model(net_name, classes=train_dataset.classes, pretrained_base=True, per_device_batch_size=cfg["batch_size_per_device"], **kwargs)
+    net_name = "_".join(("faster_rcnn", *module_list, model_cfg.pop("network")))
+    resume = model_cfg.pop("resume")
+    net = get_model(
+        net_name,
+        dataset=train_dataset,
+        pretrained_base=True,
+        per_device_batch_size=cfg["dataset"]["batch_size_per_device"],
+        **kwargs,
+        **model_cfg
+    )
 
-    cfg["save_prefix"] += net_name
-    if cfg["resume"] and cfg["resume"].strip():
-        net.load_parameters(cfg["resume"].strip())
+    cfg["train"]["save_prefix"] = os.path.join(cfg["train"]["save_dir"], net_name)
+    if resume and resume.strip():
+        net.load_parameters(resume.strip())
     else:
         for param in net.collect_params().values():
             if param._data is not None:
@@ -311,21 +356,21 @@ if __name__ == '__main__':
     else:
         im_aspect_ratio = [1.] * len(train_dataset)
     train_sampler = gcv.nn.sampler.SplitSortedBucketSampler(im_aspect_ratio,
-                                                            batch_size=cfg["batch_size_per_device"] * len(ctx),
+                                                            batch_size=cfg["dataset"]["batch_size_per_device"] * len(ctx),
                                                             num_parts=1,
                                                             part_index=0,
                                                             shuffle=True)
     train_loader = mx.gluon.data.DataLoader(
         train_dataset.transform(
-            FasterRCNNDefaultTrainTransform(net.short, net.max_size, net, ashape=net.ashape, multi_stage=cfg["use_fpn"])
+            FasterRCNNDefaultTrainTransform(net.short, net.max_size, net, ashape=net.ashape, multi_stage=cfg["model"]["use_fpn"])
         ),
         batch_sampler=train_sampler,
         batchify_fn=train_bfn,
-        num_workers=cfg["num_workers"],
+        num_workers=cfg["dataset"]["num_workers"],
     )
 
     val_bfn = Tuple(*[Append() for _ in range(3)])
-    # short是列表或元组是为了支持训练过程中增加图片大小抖动这一数据增强方式
+    # short是列表或元组，是为了在训练过程中增加图片大小抖动这一数据增强方式
     short = net.short[-1] if isinstance(net.short, (tuple, list)) else net.short
     val_loader = mx.gluon.data.DataLoader(
         val_dataset.transform(
@@ -335,7 +380,7 @@ if __name__ == '__main__':
         shuffle=False,
         batchify_fn=val_bfn,
         last_batch='keep',
-        num_workers=cfg["num_workers"]
+        num_workers=cfg["dataset"]["num_workers"]
     )
 
     train(net, train_loader, val_loader, eval_metric, ctx, cfg)

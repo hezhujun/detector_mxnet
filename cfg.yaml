@@ -1,43 +1,53 @@
 dataset:
   train_data:
-    root: H:\datasets\coco\train2017
-    annFile: H:\datasets\coco\annotations\instances_train2017.json
+    root: /root/userfolder/datasets/PennFudanPed/
+    annFile: /root/userfolder/datasets/PennFudanPed/annotations/PennFudanPed.json
   val_data:
-    root: H:\datasets\coco\val2017
-    annFile: H:\datasets\coco\annotations\instances_val2017.json
+    root: /root/userfolder/datasets/PennFudanPed/
+    annFile: /root/userfolder/datasets/PennFudanPed/annotations/PennFudanPed.json
   test_data:
-    root: H:\datasets\coco\val2017
-    annFile: H:\datasets\coco\annotations\instances_val2017.json
+    root: /root/userfolder/datasets/PennFudanPed/
+    annFile: /root/userfolder/datasets/PennFudanPed/annotations/PennFudanPed.json
+  batch_size_per_device: 1
+  num_workers: 4
 
-network: resnet50_v1b
-num_workers: 4
-batch_size_per_device: 1
-gpus: []
-epochs: 26
-resume: ""
-start_epoch: 0
-lr: 0.00125
-lr_decay: 0.1
-lr_decay_epoch: [17, 23]
-lr_warmup: 1000
-lr_warmup_factor: 0.333
-momentum: 0.9
-wd: 1e-4
-log_interval: 100
-save_prefix: "work_dir/"
-save_interval: 1
-val_interval: 1
+model:
+  network: resnet50_v1b
+  resume: ~
+  norm_layer: ~
+  use_fpn: True
+  roi_mode: align
+  roi_size: [7, 7]
+  bilinear_pool: False
+  bilinear_type: max
+
+train:
+  save_dir: "work_dir/"
+  epochs: 26
+  start_epoch: 0
+  gpus: []
+  lr: 0.00125
+  lr_decay: 0.1
+  lr_decay_epoch: [17, 23]
+  lr_warmup_iteration: 1000
+  lr_warmup_factor: 0.333
+  momentum: 0.9
+  wd: 1e-4
+  log_interval: 100
+  save_interval: 1
+  val_interval: 1
+  mixup: False
+  no_mixup_epochs: 20
+  rpn_smoothl1_rho: 0.111
+  rcnn_smoothl1_rho: 1
+  disable_hybridization: False
+  static_alloc: False
+  executor_threads: 1
+  kv_store: nccl
+
 seed: 233
-verbose: ~
-mixup: ~
-no_mixup_epochs: 20
-norm_layer: ~
-rpn_smoothl1_rho: 0.111
-rcnn-smoothl1_rho: 1
-use_fpn: ~
-disable_hybridization: ~
-static_alloc: ~
+verbose: False
+
 #amp: ~
 #horovod: ~
-executor_threads: 1
-kv_store: nccl
+

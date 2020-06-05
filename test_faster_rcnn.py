@@ -527,6 +527,7 @@ if __name__ == '__main__':
         FasterRCNNDefaultValTransform, batch_size, len(ctx), args)
 
     # testing
+    print("Begin")
     map_name, mean_ap = validate(net, val_data, ctx, eval_metric, args)
     val_msg = '\n'.join(['{}={}'.format(k, v) for k, v in zip(map_name, mean_ap)])
     print("Validation: \n{}".format(val_msg))
