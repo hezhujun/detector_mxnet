@@ -357,6 +357,8 @@ def validate(net, val_data, ctx, eval_metric, args):
     if not args.disable_hybridization:
         # input format is differnet than training, thus rehybridization is needed.
         net.hybridize(static_alloc=args.static_alloc)
+
+    rpn_gt_recalls = []
     for batch in val_data:
         batch = split_and_load(batch, ctx_list=ctx)
         det_bboxes = []
@@ -365,7 +367,6 @@ def validate(net, val_data, ctx, eval_metric, args):
         gt_bboxes = []
         gt_ids = []
         gt_difficults = []
-        rpn_gt_recalls = []
         for x, y, im_scale in zip(*batch):
             # get prediction results
             ids, scores, bboxes, roi = net(x)

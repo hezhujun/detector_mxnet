@@ -63,6 +63,8 @@ def validate(net, val_data, ctx, eval_metric, cfg):
     if not cfg["train"]["disable_hybridization"]:
         # input format is differnet than training, thus rehybridization is needed.
         net.hybridize(static_alloc=cfg["train"]["static_alloc"])
+
+    rpn_gt_recalls = []
     for batch in val_data:
         batch = split_and_load(batch, ctx_list=ctx)
         det_bboxes = []
@@ -71,7 +73,6 @@ def validate(net, val_data, ctx, eval_metric, cfg):
         gt_bboxes = []
         gt_ids = []
         gt_difficults = []
-        rpn_gt_recalls = []
         for x, y, im_scale in zip(*batch):
             # get prediction results
             ids, scores, bboxes, roi = net(x)
@@ -299,7 +300,7 @@ if __name__ == '__main__':
     gpus = cfg["train"]["gpus"]
     if gpus:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(i) for i in gpus])
-        print("CUDA_VISIBLE_DEVICES=".format(os.environ["CUDA_VISIBLE_DEVICES"]))
+        print("CUDA_VISIBLE_DEVICES={}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
     ctx = [mx.gpu(i) for i in range(len(gpus))]
     ctx = ctx if ctx else [mx.cpu()]
 
