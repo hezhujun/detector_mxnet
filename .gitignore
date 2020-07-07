@@ -2,6 +2,8 @@
 
 work_dir
 test.py
+test1.py
+test2.py
 
 cfg.yaml
 cfg-local.yaml

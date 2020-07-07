@@ -325,17 +325,9 @@ class FasterRCNN(RCNN):
                     pooled_feature = F.where(roi_level == l, pooled_feature,
                                              F.zeros_like(pooled_feature))
             elif roi_mode == "bilinear":
-                if 'box_encode' in F.contrib.__dict__ and 'box_decode' in F.contrib.__dict__:
-                    masked_rpn_rois = F.where(roi_level == l, rpn_rois, F.ones_like(rpn_rois) * -1.)
-                    pooled_feature = BilinearROIPooling(F, features[i], masked_rpn_rois, roi_size,
-                                                        1. / strides[i], sample_ratio=sampling_ratio,
-                                                        type=self.bilinear_type)
-                else:
-                    pooled_feature = BilinearROIPooling(F, features[i], rpn_rois, roi_size,
-                                                        1. / strides[i], sample_ratio=sampling_ratio,
-                                                        type=self.bilinear_type)
-                    pooled_feature = F.where(roi_level == l, pooled_feature,
-                                             F.zeros_like(pooled_feature))
+                pooled_feature = mx.nd.Custom(features[i], rpn_rois, spatial_scale=1. / strides[i],
+                                              type=self.bilinear_type, op_type='BilinearROIPooling')
+                pooled_feature = F.where(roi_level == l, pooled_feature, F.zeros_like(pooled_feature))
             else:
                 raise ValueError("Invalid roi mode: {}".format(roi_mode))
             pooled_roi_feats.append(pooled_feature)
@@ -413,9 +405,8 @@ class FasterRCNN(RCNN):
                 pooled_feat = F.contrib.ROIAlign(feat[0], rpn_roi, self._roi_size,
                                                  1. / self._strides, sample_ratio=2)
             elif self._roi_mode == "bilinear":
-                pooled_feat = BilinearROIPooling(F, feat[0], rpn_roi, self._roi_size,
-                                                 1. / self._strides, sample_ratio=2,
-                                                 type=self.bilinear_type)
+                pooled_feature = mx.nd.Custom(feat[0], rpn_roi, spatial_scale=1. / self._strides,
+                                              type=self.bilinear_type, op_type='BilinearROIPooling')
             else:
                 raise ValueError("Invalid roi mode: {}".format(self._roi_mode))
 

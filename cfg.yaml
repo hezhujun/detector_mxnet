@@ -18,7 +18,6 @@ model:
   use_fpn: True
   roi_mode: align
   roi_size: [7, 7]
-  bilinear_pool: False
   bilinear_type: max
 
 train:
@@ -40,7 +39,7 @@ train:
   no_mixup_epochs: 20
   rpn_smoothl1_rho: 0.111
   rcnn_smoothl1_rho: 1
-  disable_hybridization: False
+  disable_hybridization: False  # must be True when roi_mode is bilinear
   static_alloc: False
   executor_threads: 1
   kv_store: nccl

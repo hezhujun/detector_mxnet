@@ -34,6 +34,7 @@ def faster_rcnn_resnet50_v1b(dataset, pretrained=False, pretrained_base=True, **
     >>> model = faster_rcnn_resnet50_v1b(dataset, pretrained=True)
     >>> print(model)
     """
+    assert kwargs["roi_mode"] != "bilinear", "not support"
     from gluoncv.model_zoo.resnetv1b import resnet50_v1b
     classes = dataset.classes
     pretrained_base = False if pretrained else pretrained_base
@@ -60,27 +61,29 @@ def faster_rcnn_resnet50_v1b(dataset, pretrained=False, pretrained_base=True, **
         max_num_gt=100, **kwargs)
 
 
-def faster_rcnn_fpn_resnet50_v1b(dataset, pretrained=False, pretrained_base=True, bilinear_pool=False, bilinear_type="max", **kwargs):
+def faster_rcnn_fpn_resnet50_v1b(dataset, pretrained=False, pretrained_base=True, **kwargs):
     from gluoncv.model_zoo.resnetv1b import resnet50_v1b
     classes = dataset.classes
     pretrained_base = False if pretrained else pretrained_base
     base_network = resnet50_v1b(pretrained=pretrained_base, dilated=False,
                                 use_global_stats=True, **kwargs)
-    features = FPNFeatureExpander(
-        network=base_network,
-        outputs=['layers1_relu8_fwd', 'layers2_relu11_fwd', 'layers3_relu17_fwd',
-                 'layers4_relu8_fwd'], num_filters=[256, 256, 256, 256], use_1x1=True,
-        use_upsample=True, use_elewadd=True, use_p6=True, no_bias=False, pretrained=pretrained_base)
     top_features = None
-    if bilinear_pool:
+    if kwargs["roi_mode"] == "bilinear":
+        features = FPNFeatureExpander(
+            network=base_network,
+            outputs=['layers1_relu8_fwd', 'layers2_relu11_fwd', 'layers3_relu17_fwd',
+                     'layers4_relu8_fwd'], num_filters=[100, 100, 100, 100], use_1x1=True,
+            use_upsample=True, use_elewadd=True, use_p6=True, no_bias=False, pretrained=pretrained_base)
         box_features = nn.HybridSequential()
-        box_features.add(nn.Conv2D(100, kernel_size=1))
-        from .bilinear_roi_pooling import BilinearPooling
-        box_features.add(BilinearPooling(100, kwargs["roi_size"], type=bilinear_type))
         for _ in range(2):
             box_features.add(nn.Dense(1024, weight_initializer=mx.init.Normal(0.01)))
             box_features.add(nn.Activation('relu'))
     else:
+        features = FPNFeatureExpander(
+            network=base_network,
+            outputs=['layers1_relu8_fwd', 'layers2_relu11_fwd', 'layers3_relu17_fwd',
+                     'layers4_relu8_fwd'], num_filters=[256, 256, 256, 256], use_1x1=True,
+            use_upsample=True, use_elewadd=True, use_p6=True, no_bias=False, pretrained=pretrained_base)
         # 2 FC layer before RCNN cls and reg
         box_features = nn.HybridSequential()
         for _ in range(2):
